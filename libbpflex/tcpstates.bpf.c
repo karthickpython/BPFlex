@@ -78,7 +78,6 @@ int handle_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
 			__u64 tse = bpf_ktime_get_ns();
 		        delta_us = (tse - *tspe) / 1000;
                         flag_submit = 1;
-			bpf_printk("flags matched\n");
 		}
 	}
 
