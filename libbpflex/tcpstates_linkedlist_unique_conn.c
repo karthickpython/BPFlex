@@ -15,13 +15,11 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <unistd.h>
-#include <sys/stat.h>
 
 #define PERF_BUFFER_PAGES	16
 #define PERF_POLL_TIMEOUT_MS	100
 #define warn(...) fprintf(stderr, __VA_ARGS__)
-#define FILE_SIZE 5120
-#define TIME_THRESHOLD 2
+
 static volatile sig_atomic_t exiting = 0;
 static bool verbose = false;
 
@@ -72,117 +70,46 @@ static void sig_int(int signo)
 	exiting = 1;
 }
 
-
 FILE *file;
-int global_minutes;
-void update_time(){
-    struct tm *tm;
-    time_t t;
-    time(&t);
-    tm = localtime(&t);
-    global_minutes = tm->tm_min;
-}
 
-long long file_size_check(FILE *file){
-     
-    long long fileSize;
-    
-    long long currentPosition = ftell(file);
-    
-    fseek(file, 0, SEEK_END);
-
-    fileSize = ftell(file);
-
-    fseek(file, currentPosition, SEEK_SET);
-
-    return fileSize;
-}
-
-int copyFile(const char* sourceFilePath, const char* destinationFilePath) {
-    FILE* sourceFile = fopen(sourceFilePath, "rb");
-    if (sourceFile == NULL) {
-        perror("Source file opening error");
-        return 1; 
-    }
-
-    FILE* destinationFile = fopen(destinationFilePath, "wb");
-    if (destinationFile == NULL) {
-        perror("Destination file opening error");
-        fclose(sourceFile); 
-        return 1; 
-    }
-
-    char buffer[1024];
-    size_t bytesRead;
-    while ((bytesRead = fread(buffer, 1, sizeof(buffer), sourceFile)) > 0) {
-        fwrite(buffer, 1, bytesRead, destinationFile);
-    }
-
-    fclose(destinationFile);
-
-    return 0; 
-}
-
-bool delete_file(char *filename){
-        
-     if (remove(filename) == 0) {
-        return true;
-    } else {
-        return false;
-    }
-}
-
-int uniqueNumber() {
-    static int last = 0;
-    int newNum = time(NULL) ^ last;
-    last = newNum;
-    return newNum;
-}
-
-char file_name[150];
-bool flag_new_file = true;
 bool write_tuples(struct event *e)
 {
     char saddr[26], daddr[26];
     struct tm *tm;
     time_t t;
     char ts[32];
-    int base_time = 0;
+
     time(&t);
     tm = localtime(&t);
-    int local_minutes = tm->tm_min;
-
     strftime(ts, sizeof(ts), "%H:%M:%S", tm);
-    char* txt = ".txt";
+                printf("%8s ", ts);
+    
     inet_ntop(e->family, &e->saddr, saddr, sizeof(saddr));
     inet_ntop(e->family, &e->daddr, daddr, sizeof(daddr));
+	
+    if(e->conn_passive == 1){
+          file = fopen("unique_passive.txt", "ab");
+          if (file == NULL) {
+            perror("Error opening file");
+            return false;
+         }  
+    fprintf(file, "%s|%s|%s|%d|%s|%d|%d|%d \n", ts, e->task, saddr, e->sport, daddr, e->dport, e->tid, e->pid);
+    // Close the file
+    fclose(file);
 
+     return true;
 
-    char destination_path[200];
-    
-    if(flag_new_file){    
-        sprintf(file_name,"S247_eBPF_%d%s",uniqueNumber(), txt);
-     }
+    }	    
 
-    file = fopen(file_name,"ab");
+    file = fopen("unique_active.txt", "ab");
     if (file == NULL) {
         perror("Error opening file");
         return false;
     }
-
     fprintf(file, "%s|%s|%s|%d|%s|%d|%d|%d|%.3f\n", ts, e->task, saddr, e->sport, daddr, e->dport, e->tid, e->pid, (double)e->delta_us / 1000 );
-
-    if(((global_minutes - local_minutes) >= TIME_THRESHOLD) || (file_size_check(file) >= FILE_SIZE)){
-	 sprintf(destination_path, "../../%s",file_name);
-         copyFile(file_name, destination_path);
-	 global_minutes = local_minutes;
-         if(!delete_file(file_name))
-               perror("Error deleting  file"); 
-    }else{
-	    flag_new_file = false;
-    } 
-   
+    // Close the file
     fclose(file);
+
 }
 
 int insert_socket(struct list **headref, struct event *e, bool tuple_on)
@@ -294,6 +221,20 @@ int delete_socket(struct list **headref, struct event *e)
 
 }
 
+void print_details(struct list **node){
+     
+        
+	struct list *headd = *node;
+	char daddr[26];
+
+	while(headd != NULL){
+		inet_ntop(2, &headd->socket_details.daddr, daddr, sizeof(daddr));
+	//	printf("Active Connections  %s  task %s\n", daddr, headd->socket_details.task);
+                headd = headd->next;
+	}
+	
+}
+
 int socket_handle(struct event *e)
 {
         int state;
@@ -316,6 +257,7 @@ int socket_handle(struct event *e)
 	   if(!search_5_tuples(&head_conn, e)){
 		   insert_socket(&head_conn, e, true);
 	   }
+	   print_details(&head_conn);
 	}
 }
 
@@ -364,7 +306,7 @@ int main(int argc, char **argv)
 		warn("failed to attach BPF programs: %d\n", err);
 		goto cleanup;
 	}
-        update_time();
+
 	pb = perf_buffer__new(bpf_map__fd(obj->maps.events), PERF_BUFFER_PAGES,
 			      handle_event, handle_lost_events, NULL, NULL);
 	if (!pb) {
