@@ -10,7 +10,7 @@ LIBBPF_OBJ := $(abspath $(OUTPUT)/libbpf.a)
 LIBBLAZESYM_SRC := $(abspath blazesym/target/release/libblazesym.a)
 INCLUDES := -I$(OUTPUT) -I../src/cc/libbpf/include/uapi
 CFLAGS := -g -O2 -Wall
-BPFCFLAGS := -g -O2 -Wall
+BPFCFLAGS := -static -g -O2 -Wall
 INSTALL ?= install
 prefix ?= /usr/local
 ARCH ?= $(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm64/' \
@@ -53,7 +53,7 @@ COMMON_OBJ = \
 	$(OUTPUT)/map_helpers.o \
 	$(OUTPUT)/uprobe_helpers.o \
 	$(OUTPUT)/btf_helpers.o \
-	$(OUTPUT)/compat.o \
+#	$(OUTPUT)/compat.o \
 	$(if $(ENABLE_MIN_CORE_BTFS),$(OUTPUT)/min_core_btf_tar.o) \
 	#
 
@@ -94,6 +94,8 @@ endif
 ifeq ($(USE_BLAZESYM),1)
 CFLAGS += -DUSE_BLAZESYM=1
 endif
+
+LDFLAGS += -static
 
 ifeq ($(USE_BLAZESYM),1)
 LDFLAGS += $(OUTPUT)/libblazesym.a -lrt -lpthread -ldl

@@ -20,8 +20,8 @@
 #define PERF_BUFFER_PAGES	16
 #define PERF_POLL_TIMEOUT_MS	100
 #define warn(...) fprintf(stderr, __VA_ARGS__)
-#define FILE_SIZE 5120
-#define TIME_THRESHOLD 2
+#define FILE_SIZE 102400  //100kb 
+#define TIME_THRESHOLD 3
 static volatile sig_atomic_t exiting = 0;
 static bool verbose = false;
 
@@ -74,14 +74,6 @@ static void sig_int(int signo)
 
 
 FILE *file;
-int global_minutes;
-void update_time(){
-    struct tm *tm;
-    time_t t;
-    time(&t);
-    tm = localtime(&t);
-    global_minutes = tm->tm_min;
-}
 
 long long file_size_check(FILE *file){
      
@@ -94,7 +86,6 @@ long long file_size_check(FILE *file){
     fileSize = ftell(file);
 
     fseek(file, currentPosition, SEEK_SET);
-
     return fileSize;
 }
 
@@ -132,11 +123,32 @@ bool delete_file(char *filename){
     }
 }
 
+bool isFiveMinutesPassed() {
+    static time_t firstCallTime = 0; // Static variable to store the time of the first call
+    time_t currentTime;
+
+    time(&currentTime);
+    if (firstCallTime == 0) {
+        firstCallTime = currentTime;
+        return false; 
+    }
+
+    if (currentTime - firstCallTime >= 180) {
+        firstCallTime = currentTime; // Reset the timer
+        return true;
+    }
+
+    return false;
+}
+
 int uniqueNumber() {
-    static int last = 0;
-    int newNum = time(NULL) ^ last;
-    last = newNum;
-    return newNum;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    long long milliseconds = tv.tv_sec * 1000LL + tv.tv_usec / 1000; 
+
+    srand(milliseconds);
+
+    return rand();
 }
 
 char file_name[150];
@@ -157,10 +169,9 @@ bool write_tuples(struct event *e)
     inet_ntop(e->family, &e->saddr, saddr, sizeof(saddr));
     inet_ntop(e->family, &e->daddr, daddr, sizeof(daddr));
 
-
     char destination_path[200];
     
-    if(flag_new_file){    
+    if(flag_new_file){ 
         sprintf(file_name,"S247_eBPF_%d%s",uniqueNumber(), txt);
      }
 
@@ -171,13 +182,12 @@ bool write_tuples(struct event *e)
     }
 
     fprintf(file, "%s|%s|%s|%d|%s|%d|%d|%d|%.3f\n", ts, e->task, saddr, e->sport, daddr, e->dport, e->tid, e->pid, (double)e->delta_us / 1000 );
-
-    if(((global_minutes - local_minutes) >= TIME_THRESHOLD) || (file_size_check(file) >= FILE_SIZE)){
-	 sprintf(destination_path, "../../%s",file_name);
+    if((isFiveMinutesPassed()) || (file_size_check(file) >= FILE_SIZE)){
+	 sprintf(destination_path, "/opt/site24x7/monagent/data/%s",file_name);
          copyFile(file_name, destination_path);
-	 global_minutes = local_minutes;
          if(!delete_file(file_name))
-               perror("Error deleting  file"); 
+               perror("Error deleting  file");
+	 flag_new_file = true; 
     }else{
 	    flag_new_file = false;
     } 
@@ -364,7 +374,7 @@ int main(int argc, char **argv)
 		warn("failed to attach BPF programs: %d\n", err);
 		goto cleanup;
 	}
-        update_time();
+       
 	pb = perf_buffer__new(bpf_map__fd(obj->maps.events), PERF_BUFFER_PAGES,
 			      handle_event, handle_lost_events, NULL, NULL);
 	if (!pb) {
@@ -378,7 +388,7 @@ int main(int argc, char **argv)
 		err = 1;
 		goto cleanup;
 	}
-
+        isFiveMinutesPassed();
 
 	while (!exiting) {
 		err = perf_buffer__poll(pb, PERF_POLL_TIMEOUT_MS);
