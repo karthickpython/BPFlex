@@ -20,7 +20,6 @@
 #define PERF_BUFFER_PAGES	16
 #define PERF_POLL_TIMEOUT_MS	100
 #define warn(...) fprintf(stderr, __VA_ARGS__)
-#define FILE_SIZE 102400  //100kb 
 #define TIME_THRESHOLD 3
 static volatile sig_atomic_t exiting = 0;
 static bool verbose = false;
@@ -72,6 +71,49 @@ static void sig_int(int signo)
 	exiting = 1;
 }
 
+char parsed_data[200];
+char path[150];
+int trans_time;
+FILE *ptr;
+int INI_Parser(char *param){
+
+        ptr = fopen("agent.cfg.ini","r");
+        if(ptr == NULL){
+                perror("Error opening file");
+                return 1;
+        }
+        char my_file[5000];
+        char a[100] = "file_size";
+        int counter = 0;
+        bool start = false;
+        int path_count = 0;
+        while(fgets(my_file, 5000, ptr)){
+
+         if(strstr(my_file, param)){
+           while(my_file[counter] != '\0'){
+              if(my_file[counter] == '='){
+                      start = true;
+                      counter++;
+                      continue;
+              }
+              if(start){
+                      if((my_file[counter] == ' ') || (my_file[counter] == '\n')){
+                              counter++;
+                              continue;
+                      }
+                      parsed_data[path_count++] = my_file[counter];
+              }
+
+               counter++;
+         }
+           parsed_data[path_count] = '\0';
+        }
+        }
+        fclose(ptr);
+
+        return 0;
+}
+   
 
 FILE *file;
 
@@ -122,7 +164,7 @@ bool delete_file(char *filename){
         return false;
     }
 }
-
+int Parsed_time;
 bool isFiveMinutesPassed() {
     static time_t firstCallTime = 0; // Static variable to store the time of the first call
     time_t currentTime;
@@ -133,7 +175,7 @@ bool isFiveMinutesPassed() {
         return false; 
     }
 
-    if (currentTime - firstCallTime >= 180) {
+    if (currentTime - firstCallTime >= Parsed_time) {
         firstCallTime = currentTime; // Reset the timer
         return true;
     }
@@ -153,6 +195,7 @@ int uniqueNumber() {
 
 char file_name[150];
 bool flag_new_file = true;
+int FILE_SIZE;
 bool write_tuples(struct event *e)
 {
     char saddr[26], daddr[26];
@@ -169,7 +212,7 @@ bool write_tuples(struct event *e)
     inet_ntop(e->family, &e->saddr, saddr, sizeof(saddr));
     inet_ntop(e->family, &e->daddr, daddr, sizeof(daddr));
 
-    char destination_path[200];
+    char destination_path[500];
     
     if(flag_new_file){ 
         sprintf(file_name,"S247_eBPF_%d%s",uniqueNumber(), txt);
@@ -183,7 +226,8 @@ bool write_tuples(struct event *e)
 
     fprintf(file, "%s|%s|%s|%d|%s|%d|%d|%d|%.3f\n", ts, e->task, saddr, e->sport, daddr, e->dport, e->tid, e->pid, (double)e->delta_us / 1000 );
     if((isFiveMinutesPassed()) || (file_size_check(file) >= FILE_SIZE)){
-	 sprintf(destination_path, "/opt/site24x7/monagent/data/%s",file_name);
+         snprintf(destination_path, sizeof(destination_path), "%s/%s",path,file_name);
+	 printf("desti path %s", destination_path);
          copyFile(file_name, destination_path);
          if(!delete_file(file_name))
                perror("Error deleting  file");
@@ -195,138 +239,16 @@ bool write_tuples(struct event *e)
     fclose(file);
 }
 
-int insert_socket(struct list **headref, struct event *e, bool tuple_on)
-{
-	if(e->newstate != TCP_ESTABLISHED)
-		return 0;
-
-        
-	struct list *node = (struct list*) malloc(sizeof(struct list));
-	node->socket_details.skaddr = e->skaddr;
-        node->socket_details.newstate = e->newstate;
-	node->socket_details.saddr = e->saddr;
-	node->socket_details.daddr = e->daddr;
-	node->socket_details.pid = e->pid;
-        strcpy(node->socket_details.task, e->task);
-	node->socket_details.sport = e->sport;
-	node->socket_details.dport = e->dport;
-	node->socket_details.protocol = e->protocol;
-	
-
-	node->next = NULL;
-
-        if(tuple_on){
-	   write_tuples(e);
-	}
-
-	if(*headref == NULL){
-		*headref = node;
-		
-	}else{	
-           struct list *head = *headref;
-      	   while(head->next != NULL){
-		head = head->next;
-	   }
-          head->next = node;
-	}
-}
-
-int search_socket(struct list **headref, struct event *e)
-{
-	 struct list *head = *headref;
-         if(head == NULL){
-                return 0;
-	 }
-	 while(head != NULL){
-		if(head->socket_details.skaddr == e->skaddr){
-			return head->socket_details.newstate;
-		}
-		head = head->next;
-	  } 
-         
-	 return false;
-}
-
-bool search_5_tuples(struct list **headref, struct event *e)
-{
-
-	struct list *head = *headref;
-
-	if(head == NULL)
-		return false;
-
-	while(head != NULL){
-		if(head->socket_details.daddr == e->daddr &&   
-		head->socket_details.dport == e->dport &&
-		head->socket_details.protocol == e->protocol)
-		{
-			return true;
-		}
-
-		head = head->next;
-       	}
-
-	return false;
-}
-
-int delete_socket(struct list **headref, struct event *e)
-{
-
-          struct list *head = *headref;
-	  struct list *prev = NULL;
-
-
-	  if(head != NULL && head->socket_details.skaddr == e->skaddr){
-		  *headref = head->next;
-		  
-		  free(head);
-		  return 0; 
-	   }
-
-	  while(head != NULL && head->socket_details.skaddr != e->skaddr){
-		  prev= head;
-		  head=head->next;
-	  }
-
-	  if(head == NULL)
-              return 0;
-
-	if (prev != NULL) {
-        prev->next = head->next;
-        
-        free(head);
-        } else {
-        // If prev is NULL, it means we're deleting the first node, so we don't need to free prev.
-        *headref = head->next;
-        
-        free(head);
-        }
-
-}
-
 int socket_handle(struct event *e)
 {
         int state;
-	state = search_socket(&head,e);
-	int open, close;
-        if(e->conn_passive == 1){
-		write_tuples(e);
-	}
 
-	if(state == TCP_ESTABLISHED && e->newstate == TCP_CLOSE)
-	{	
-	   close = 1;
-           delete_socket(&head, e);
-	}
+        if(e->conn_passive == 1)
+	     write_tuples(e);
 
-        if(e->newstate == TCP_ESTABLISHED)
-	{
-           open = 1;		
-           insert_socket(&head, e, false);
-	   if(!search_5_tuples(&head_conn, e)){
-		   insert_socket(&head_conn, e, true);
-	   }
-	}
+	state = e->newstate;
+	if(state == TCP_ESTABLISHED)
+	    write_tuples(e);
 }
 
 static void handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
@@ -354,6 +276,16 @@ int main(int argc, char **argv)
 		warn("failed to fetch necessary BTF for CO-RE: %s\n", strerror(-err));
 		return 1;
 	}
+        printf("Printing path details \n");
+	INI_Parser("path");
+	strcpy(path,parsed_data);
+	printf("%s\n",path);
+        INI_Parser("seconds");
+	Parsed_time = atoi(parsed_data);
+	printf("%d\n", Parsed_time);
+	INI_Parser("file_size");
+        FILE_SIZE = atoi(parsed_data);
+	printf("%d\n", FILE_SIZE);
 
 	obj = tcpstates_bpf__open_opts(&open_opts);
 	if (!obj) {
