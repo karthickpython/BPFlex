@@ -35,6 +35,7 @@ BZ_APPS = \
 
 APPS = \
 	tcpstates \
+	sslsniff \
 	$(BZ_APPS) \
 	#
 
